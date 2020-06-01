@@ -98,6 +98,7 @@ if __name__ == "__main__":
     parser.add_argument("--img_size", type=int, default=cnf.BEV_WIDTH, help="size of each image dimension")
     parser.add_argument("--split", type=str, default="valid", help="text file having image lists in dataset")
     parser.add_argument("--folder", type=str, default="training", help="directory name that you downloaded all dataset")
+    parser.add_argument("--export", action='store_true')
     opt = parser.parse_args()
     print(opt)
 
@@ -158,6 +159,7 @@ if __name__ == "__main__":
         img2d = cv2.imread(img_paths[0])
         calib = kitti_utils.Calibration(img_paths[0].replace(".png", ".txt").replace("image_2", "calib"))
         objects_pred = predictions_to_kitti_format(img_detections, calib, img2d.shape, opt.img_size)
+
         if opt.export:
             output_filename = 'results/'+img_paths[0][-10:-4]+'.txt'
             output_file =  open(output_filename, 'w')
