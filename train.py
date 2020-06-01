@@ -25,10 +25,11 @@ if __name__ == "__main__":
     parser.add_argument("--img_size", type=int, default=cnf.BEV_WIDTH, help="size of each image dimension")
     parser.add_argument("--evaluation_interval", type=int, default=2, help="interval evaluations on validation set")
     parser.add_argument("--multiscale_training", default=True, help="allow for multi-scale training")
+    parser.add_argument("--name", type=str, default="dummy")
     opt = parser.parse_args()
     print(opt)
 
-    logger = Logger("logs")
+    logger = Logger("logs/"+opt.name)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     os.makedirs("checkpoints", exist_ok=True)
     class_names = load_classes("data/classes.names")
@@ -124,7 +125,7 @@ if __name__ == "__main__":
                 for j, yolo in enumerate(model.yolo_layers):
                     for name, metric in yolo.metrics.items():
                         if name != "grid_size":
-                            tensorboard_log += [(f"{name}_{j+1}", metric)]
+                            tensorboard_log += [(f"{j+1}/{name}", metric)]
                 tensorboard_log += [("loss", loss.item())]
                 logger.list_of_scalars_summary(tensorboard_log, batches_done)
 
@@ -165,7 +166,7 @@ if __name__ == "__main__":
                 ap_table += [[c, class_names[c], "%.5f" % AP[i]]]
             print(AsciiTable(ap_table).table)
             print(f"---- mAP {AP.mean()}")
-    
+
             #if epoch % opt.checkpoint_interval == 0:
             if AP.mean() > max_mAP:
                 torch.save(model.state_dict(), f"checkpoints/yolov3_ckpt_epoch-%d_MAP-%.2f.pth" % (epoch, AP.mean()))
