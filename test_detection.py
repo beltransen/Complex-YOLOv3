@@ -19,6 +19,7 @@ import utils.mayavi_viewer as mview
 
 def predictions_to_kitti_format(img_detections, calib, img_shape_2d, img_size, RGB_Map=None):
     predictions = np.zeros([50, 7], dtype=np.float32)
+    predictions_confidence = np.zeros([50, 2], dtype=np.float32)
     count = 0
     for detections in img_detections:
         if detections is None:
@@ -27,6 +28,7 @@ def predictions_to_kitti_format(img_detections, calib, img_shape_2d, img_size, R
         for x, y, w, l, im, re, conf, cls_conf, cls_pred in detections:
             yaw = np.arctan2(im, re)
             predictions[count, :] = cls_pred, x/img_size, y/img_size, w/img_size, l/img_size, im, re
+            predictions_confidence[count, :] =  conf, cls_conf
             count += 1
 
     predictions = bev_utils.inverse_yolo_target(predictions, cnf.boundary)
@@ -48,7 +50,8 @@ def predictions_to_kitti_format(img_detections, calib, img_shape_2d, img_size, R
         obj.t = l[1:4]
         obj.h,obj.w,obj.l = l[4:7]
         obj.ry = np.arctan2(math.sin(l[7]), math.cos(l[7]))
-    
+        obj.score = predictions_confidence[index][-1] * predictions_confidence[index][-2]
+
         _, corners_3d = kitti_utils.compute_box_3d(obj, calib.P)
         corners3d.append(corners_3d)
         objects_new.append(obj)
@@ -94,6 +97,7 @@ if __name__ == "__main__":
     parser.add_argument("--img_size", type=int, default=cnf.BEV_WIDTH, help="size of each image dimension")
     parser.add_argument("--split", type=str, default="valid", help="text file having image lists in dataset")
     parser.add_argument("--folder", type=str, default="training", help="directory name that you downloaded all dataset")
+    parser.add_argument("--export", action='store_true')
     opt = parser.parse_args()
     print(opt)
 
@@ -136,10 +140,10 @@ if __name__ == "__main__":
         RGB_Map[:, :, 2] = bev_maps[0, :, :]  # r_map
         RGB_Map[:, :, 1] = bev_maps[1, :, :]  # g_map
         RGB_Map[:, :, 0] = bev_maps[2, :, :]  # b_map
-        
+
         RGB_Map *= 255
         RGB_Map = RGB_Map.astype(np.uint8)
-        
+
         for detections in img_detections:
             if detections is None:
                 continue
@@ -153,12 +157,19 @@ if __name__ == "__main__":
 
         img2d = cv2.imread(img_paths[0])
         calib = kitti_utils.Calibration(img_paths[0].replace(".png", ".txt").replace("image_2", "calib"))
-        objects_pred = predictions_to_kitti_format(img_detections, calib, img2d.shape, opt.img_size)  
-        
-        img2d = mview.show_image_with_boxes(img2d, objects_pred, calib, False)
-        
-        cv2.imshow("bev img", RGB_Map)
-        cv2.imshow("img2d", img2d)
+        objects_pred = predictions_to_kitti_format(img_detections, calib, img2d.shape, opt.img_size)
 
-        if cv2.waitKey(0) & 0xFF == 27:
-            break
+        if opt.export:
+            output_filename = 'results/'+img_paths[0][-10:-4]+'.txt'
+            output_file =  open(output_filename, 'w')
+            for obj in objects_pred:
+                output_file.write(obj.to_kitti_format()+'\n')
+
+        else:
+            img2d = mview.show_image_with_boxes(img2d, objects_pred, calib, False)
+
+            cv2.imshow("bev img", RGB_Map)
+            cv2.imshow("img2d", img2d)
+
+            if cv2.waitKey(0) & 0xFF == 27:
+                break
