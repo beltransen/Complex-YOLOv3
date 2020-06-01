@@ -18,15 +18,17 @@ import utils.config as cnf
 import utils.mayavi_viewer as mview
 
 def predictions_to_kitti_format(img_detections, calib, img_shape_2d, img_size, RGB_Map=None):
-    predictions = np.zeros([50, 7], dtype=np.float32)
+    predictions = np.zeros([50, 9], dtype=np.float32)
+    predictions_confidence = np.zeros([50, 2], dtype=np.float32)
     count = 0
     for detections in img_detections:
         if detections is None:
             continue
         # Rescale boxes to original image
-        for x, y, w, l, im, re, conf, cls_conf, cls_pred in detections:
+        for x, y, w, l, im, re, conf, cls_conf, cls_pred, z, height in detections:
             yaw = np.arctan2(im, re)
-            predictions[count, :] = cls_pred, x/img_size, y/img_size, w/img_size, l/img_size, im, re
+            predictions[count, :] = cls_pred, x/img_size, y/img_size, w/img_size, l/img_size, im, re, z, height
+            predictions_confidence[count, :] =  conf, cls_conf
             count += 1
 
     predictions = bev_utils.inverse_yolo_target(predictions, cnf.boundary)
@@ -48,7 +50,9 @@ def predictions_to_kitti_format(img_detections, calib, img_shape_2d, img_size, R
         obj.t = l[1:4]
         obj.h,obj.w,obj.l = l[4:7]
         obj.ry = np.arctan2(math.sin(l[7]), math.cos(l[7]))
-    
+
+        obj.score = predictions_confidence[index][-1] * predictions_confidence[index][-2]
+
         _, corners_3d = kitti_utils.compute_box_3d(obj, calib.P)
         corners3d.append(corners_3d)
         objects_new.append(obj)
@@ -75,7 +79,7 @@ def predictions_to_kitti_format(img_detections, calib, img_shape_2d, img_size, R
         obj.box2d = img_boxes[i, :]
 
     if RGB_Map is not None:
-        labels, noObjectLabels = kitti_utils.read_labels_for_bevbox(objects_new)    
+        labels, noObjectLabels = kitti_utils.read_labels_for_bevbox(objects_new)
         if not noObjectLabels:
             labels[:, 1:] = aug_utils.camera_to_lidar_box(labels[:, 1:], calib.V2C, calib.R0, calib.P) # convert rect cam to velo cord
 
@@ -106,23 +110,23 @@ if __name__ == "__main__":
     model.load_state_dict(torch.load(opt.weights_path))
     # Eval mode
     model.eval()
-    
+
     dataset = KittiYOLODataset(cnf.root_dir, split=opt.split, mode='TEST', folder=opt.folder, data_aug=False)
     data_loader = torch_data.DataLoader(dataset, 1, shuffle=False)
 
     Tensor = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
 
-    start_time = time.time()                        
+    start_time = time.time()
     for index, (img_paths, bev_maps) in enumerate(data_loader):
-        
+
         # Configure bev image
         input_imgs = Variable(bev_maps.type(Tensor))
 
-        # Get detections 
+        # Get detections
         with torch.no_grad():
             detections = model(input_imgs)
-            detections = utils.non_max_suppression_rotated_bbox(detections, opt.conf_thres, opt.nms_thres) 
-        
+            detections = utils.non_max_suppression_rotated_bbox(detections, opt.conf_thres, opt.nms_thres)
+
         end_time = time.time()
         print(f"FPS: {(1.0/(end_time-start_time)):0.2f}")
         start_time = end_time
@@ -136,29 +140,36 @@ if __name__ == "__main__":
         RGB_Map[:, :, 2] = bev_maps[0, :, :]  # r_map
         RGB_Map[:, :, 1] = bev_maps[1, :, :]  # g_map
         RGB_Map[:, :, 0] = bev_maps[2, :, :]  # b_map
-        
+
         RGB_Map *= 255
         RGB_Map = RGB_Map.astype(np.uint8)
-        
+
         for detections in img_detections:
             if detections is None:
                 continue
 
             # Rescale boxes to original image
             detections = utils.rescale_boxes(detections, opt.img_size, RGB_Map.shape[:2])
-            for x, y, w, l, im, re, conf, cls_conf, cls_pred in detections:
+            for x, y, w, l, im, re, conf, cls_conf, cls_pred, z, height in detections:
                 yaw = np.arctan2(im, re)
                 # Draw rotated box
                 bev_utils.drawRotatedBox(RGB_Map, x, y, w, l, yaw, cnf.colors[int(cls_pred)])
 
         img2d = cv2.imread(img_paths[0])
         calib = kitti_utils.Calibration(img_paths[0].replace(".png", ".txt").replace("image_2", "calib"))
-        objects_pred = predictions_to_kitti_format(img_detections, calib, img2d.shape, opt.img_size)  
-        
-        img2d = mview.show_image_with_boxes(img2d, objects_pred, calib, False)
-        
-        cv2.imshow("bev img", RGB_Map)
-        cv2.imshow("img2d", img2d)
+        objects_pred = predictions_to_kitti_format(img_detections, calib, img2d.shape, opt.img_size)
+        if opt.export:
+            output_filename = 'results/'+img_paths[0][-10:-4]+'.txt'
+            output_file =  open(output_filename, 'w')
+            for obj in objects_pred:
+                output_file.write(obj.to_kitti_format()+'\n')
+            output_file.close()
 
-        if cv2.waitKey(0) & 0xFF == 27:
-            break
+        else:
+            img2d = mview.show_image_with_boxes(img2d, objects_pred, calib, False)
+
+            cv2.imshow("bev img", RGB_Map)
+            cv2.imshow("img2d", img2d)
+
+            if cv2.waitKey(0) & 0xFF == 27:
+                break

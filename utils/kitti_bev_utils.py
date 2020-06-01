@@ -73,7 +73,7 @@ def read_labels_for_bevbox(objects):
             bbox.append(obj.cls_id)
             bbox.extend([obj.t[0], obj.t[1], obj.t[2], obj.h, obj.w, obj.l, obj.ry])
             bbox_selected.append(bbox)
-    
+
     if (len(bbox_selected) == 0):
         return np.zeros((1, 8), dtype=np.float32), True
     else:
@@ -104,8 +104,9 @@ def get_corners(x, y, w, l, yaw):
 
 def build_yolo_target(labels):
     bc = cnf.boundary
-    target = np.zeros([50, 7], dtype=np.float32)
-    
+    # target = np.zeros([50, 7], dtype=np.float32)
+    target = np.zeros([50, 9], dtype=np.float32)
+
     index = 0
     for i in range(labels.shape[0]):
         cl, x, y, z, h, w, l, yaw = labels[i]
@@ -121,23 +122,32 @@ def build_yolo_target(labels):
             w1 = w / (bc["maxY"] - bc["minY"])
             l1 = l / (bc["maxX"] - bc["minX"])
 
+            # TODO
+            anchor_z = 0.895
+            avg_obj_height = 1.65
+            z1 = (z - anchor_z) / avg_obj_height
+            h1 = h / avg_obj_height
+
             target[index][0] = cl
-            target[index][1] = y1 
+            target[index][1] = y1
             target[index][2] = x1
             target[index][3] = w1
             target[index][4] = l1
             target[index][5] = math.sin(float(yaw))
             target[index][6] = math.cos(float(yaw))
+            target[index][7] = z1
+            target[index][8] = h1
 
             index = index+1
 
     return target
 
 def inverse_yolo_target(targets, bc):
+    # print('targets ', targets.shape)
     ntargets = 0
     for i, t in enumerate(targets):
         if t.sum(0):ntargets += 1
-    
+
     labels = np.zeros([ntargets, 8], dtype=np.float32)
 
     n = 0
@@ -145,9 +155,9 @@ def inverse_yolo_target(targets, bc):
         if t.sum(0) == 0:
             continue
 
-        c, y, x, w, l, im, re = t        
-        z, h = -1.55, 1.5
-        if c == 1: 
+        c, y, x, w, l, im, re, z, height = t
+        # z, h = -1.55, 1.5
+        if c == 1:
             h = 1.8
         elif c == 2:
             h = 1.4
@@ -159,6 +169,11 @@ def inverse_yolo_target(targets, bc):
 
         w -= 0.3
         l -= 0.3
+
+        anchor_z = 0.895
+        avg_obj_height = 1.65
+        z = z * avg_obj_height + anchor_z
+        h = np.exp(height) * avg_obj_height
 
         labels[n, :] = c, x, y, z, h, w, l, - np.arctan2(im, re) - 2*np.pi
         n += 1

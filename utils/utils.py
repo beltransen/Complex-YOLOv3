@@ -215,7 +215,7 @@ def rotated_box_wh_iou_polygon(anchor, wh, imre):
     imre = imre.t()
     w2, h2, im2, re2 = wh[0], wh[1], imre[0], imre[1]
 
-    anchor_box = torch.cuda.FloatTensor([100, 100, w1, h1, im1, re1]).view(-1, 6)    
+    anchor_box = torch.cuda.FloatTensor([100, 100, w1, h1, im1, re1]).view(-1, 6)
     target_boxes = torch.cuda.FloatTensor(w2.shape[0], 6).fill_(100)
 
     target_boxes[:, 2] = w2
@@ -233,10 +233,10 @@ def rotated_box_11_iou_polygon(box1, box2, nG):
     box2_new = torch.cuda.FloatTensor(box2.shape[0], 6).fill_(0)
 
     box1_new[:, :4] = box1[:, :4]
-    box1_new[:, 4:] = box1[:, 4:]
+    box1_new[:, 4:6] = box1[:, 4:6]
 
     box2_new[:, :4] = box2[:, :4] * nG
-    box2_new[:, 4:] = box2[:, 4:]
+    box2_new[:, 4:6] = box2[:, 4:6]
 
     ious = []
     for i in range(box1_new.shape[0]):
@@ -261,7 +261,7 @@ def rotated_bbox_iou_polygon(box1, box2):
 
     bbox2 = []
     for i in range(box2.shape[0]):
-        x,y,w,l,im,re = box2[i,:]
+        x,y,w,l,im,re = box2[i,:6]
         angle = np.arctan2(im, re)
         bev_corners = bev_utils.get_corners(x, y, w, l, angle)
         bbox2.append(bev_corners)
@@ -270,7 +270,7 @@ def rotated_bbox_iou_polygon(box1, box2):
     return compute_iou(bbox1[0], bbox2)
 
 def non_max_suppression_rotated_bbox(prediction, conf_thres=0.95, nms_thres=0.4):
-    """ 
+    """
         Removes detections with lower object confidence score than 'conf_thres' and performs
         Non-Maximum Suppression to further filter detections.
         Returns detections with shape:
@@ -285,11 +285,11 @@ def non_max_suppression_rotated_bbox(prediction, conf_thres=0.95, nms_thres=0.4)
         if not image_pred.size(0):
             continue
         # Object confidence times class confidence
-        score = image_pred[:, 6] * image_pred[:, 7:].max(1)[0]
+        score = image_pred[:, 6] * image_pred[:, 7:7+len(cnf.class_list)].max(1)[0]
         # Sort by it
         image_pred = image_pred[(-score).argsort()]
-        class_confs, class_preds = image_pred[:, 7:].max(1, keepdim=True)
-        detections = torch.cat((image_pred[:, :7].float(), class_confs.float(), class_preds.float()), 1)
+        class_confs, class_preds = image_pred[:, 7:7+len(cnf.class_list)].max(1, keepdim=True)
+        detections = torch.cat((image_pred[:, :7].float(), class_confs.float(), class_preds.float(), image_pred[:, 7+len(cnf.class_list):]), 1)
         # Perform non-maximum suppression
         keep_boxes = []
         while detections.size(0):
@@ -297,7 +297,7 @@ def non_max_suppression_rotated_bbox(prediction, conf_thres=0.95, nms_thres=0.4)
             large_overlap = rotated_bbox_iou_polygon(detections[0, :6], detections[:, :6]) > nms_thres
             # large_overlap = torch.from_numpy(large_overlap.astype('uint8'))
             large_overlap = torch.from_numpy(large_overlap)
-            label_match = detections[0, -1] == detections[:, -1]
+            label_match = detections[0, 8] == detections[:, 8]
             # Indices of boxes with lower confidence scores, large IOUs and matching labels
             invalid = large_overlap & label_match
             weights = detections[invalid, 6:7]
@@ -312,6 +312,7 @@ def non_max_suppression_rotated_bbox(prediction, conf_thres=0.95, nms_thres=0.4)
 
 def build_targets(pred_boxes, pred_cls, target, anchors, ignore_thres):
 
+    BoolTensor = torch.cuda.BoolTensor if pred_boxes.is_cuda else torch.BoolTensor
     ByteTensor = torch.cuda.ByteTensor if pred_boxes.is_cuda else torch.ByteTensor
     FloatTensor = torch.cuda.FloatTensor if pred_boxes.is_cuda else torch.ByteTensor
 
@@ -333,19 +334,23 @@ def build_targets(pred_boxes, pred_cls, target, anchors, ignore_thres):
     tre = FloatTensor(nB, nA, nG, nG).fill_(0)
     tcls = FloatTensor(nB, nA, nG, nG, nC).fill_(0)
 
+    tz = FloatTensor(nB, nA, nG, nG).fill_(0)
+    theight = FloatTensor(nB, nA, nG, nG).fill_(0)
+
     # Convert to position relative to box
-    target_boxes = target[:, 2:8]
-    
+    # target_boxes = target[:, 2:8]
+    target_boxes = target[:, 2:10]
+
     gxy = target_boxes[:, :2] * nG
     gwh = target_boxes[:, 2:4] * nG
-    gimre = target_boxes[:, 4:]
+    gimre = target_boxes[:, 4:6]
 
     # Get anchors with best iou
-    ious = torch.stack([rotated_box_wh_iou_polygon(anchor, gwh, gimre) for anchor in anchors])    
+    ious = torch.stack([rotated_box_wh_iou_polygon(anchor, gwh, gimre) for anchor in anchors])
 
     best_ious, best_n = ious.max(0)
     b, target_labels = target[:, :2].long().t()
-    
+
     gx, gy = gxy.t()
     gw, gh = gwh.t()
     gim, gre = gimre.t()
@@ -364,9 +369,13 @@ def build_targets(pred_boxes, pred_cls, target, anchors, ignore_thres):
     # Width and height
     tw[b, best_n, gj, gi] = torch.log(gw / anchors[best_n][:, 0] + 1e-16)
     th[b, best_n, gj, gi] = torch.log(gh / anchors[best_n][:, 1] + 1e-16)
-    # Im and real part 
+    # Im and real part
     tim[b, best_n, gj, gi] = gim
     tre[b, best_n, gj, gi] = gre
+
+    # TODO
+    tz[b, best_n, gj, gi] = target_boxes[:,6]
+    theight[b, best_n, gj, gi] = torch.log(target_boxes[:,7])
 
     # One-hot encoding of label
     tcls[b, best_n, gj, gi, target_labels] = 1
@@ -375,6 +384,6 @@ def build_targets(pred_boxes, pred_cls, target, anchors, ignore_thres):
 
     rotated_iou_scores = rotated_box_11_iou_polygon(pred_boxes[b, best_n, gj, gi], target_boxes, nG)
     iou_scores[b, best_n, gj, gi] = rotated_iou_scores.to('cuda:0')
-     
+
     tconf = obj_mask.float()
-    return iou_scores, class_mask, obj_mask, noobj_mask, tx, ty, tw, th, tim, tre, tcls, tconf
+    return iou_scores, class_mask, obj_mask.type(BoolTensor), noobj_mask.type(BoolTensor), tx, ty, tw, th, tim, tre, tcls, tconf, tz, theight

@@ -80,16 +80,16 @@ class KittiYOLODataset(KittiDataset):
         return False
 
     def __getitem__(self, index):
-        
+
         sample_id = int(self.sample_id_list[index])
 
         if self.mode in ['TRAIN', 'EVAL']:
-            lidarData = self.get_lidar(sample_id)    
-            objects = self.get_label(sample_id)   
+            lidarData = self.get_lidar(sample_id)
+            objects = self.get_label(sample_id)
             calib = self.get_calib(sample_id)
 
             labels, noObjectLabels = bev_utils.read_labels_for_bevbox(objects)
-    
+
             if not noObjectLabels:
                 labels[:, 1:] = augUtils.camera_to_lidar_box(labels[:, 1:], calib.V2C, calib.R0, calib.P)  # convert rect cam to velo cord
 
@@ -104,12 +104,13 @@ class KittiYOLODataset(KittiDataset):
             ntargets = 0
             for i, t in enumerate(target):
                 if t.sum(0):
-                    ntargets += 1            
-            targets = torch.zeros((ntargets, 8))
+                    ntargets += 1
+            # targets = torch.zeros((ntargets, 8))
+            targets = torch.zeros((ntargets, 10)) # TODO
             for i, t in enumerate(target):
                 if t.sum(0):
                     targets[i, 1:] = torch.from_numpy(t)
-            
+
             img = torch.from_numpy(rgb_map).type(torch.FloatTensor)
 
             if self.data_aug:
@@ -175,6 +176,6 @@ class KittiYOLO2WayDataset(KittiDataset):
         img_file = os.path.join(self.image_path, '%06d.png' % sample_id)
 
         return img_file, front_bev, back_bev
-    
+
     def __len__(self):
         return len(self.sample_id_list)
